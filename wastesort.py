@@ -1,120 +1,107 @@
-import PIL
 import os
-import numpy as np
-from tensorflow.keras.preprocessing import image
-import numpy as np
+import time
 import cv2
+import numpy as np
+import tensorflow as tf
+import serial
+from roboflow import Roboflow
+from object_detection.utils import label_map_util
+from object_detection.utils import visualization_utils as vis_util
 
+# 1. Initialize Serial Communication with Arduino
+# Make sure to replace 'COM_PORT' with the actual port (e.g., 'COM3' on Windows or '/dev/ttyUSB0' on Linux)
+ser = serial.Serial('COM_PORT', 9600)  # Open serial port at 9600 baud rate
 
-categories = ['Greenleaves', 'bottle', 'clothes', 'vegetables']
-dataset_dir = r'C:\Users\jeevith\Downloads\python\dataset'
+# 2. Download the Dataset from Roboflow
+rf = Roboflow(api_key="aNil8uJXRq")  # Using the provided API key
+project = rf.workspace("sakib-9bfzb").project("waste-detection-2.0-hwohv")
+version = project.version(2)
+dataset = version.download("tfrecord")
+print("Dataset downloaded to:", dataset.location)
 
-data = []
-labels = []
+# 3. Set up paths for training data
+TRAIN_TFRECORD = os.path.join(dataset.location, "train.record")
+TEST_TFRECORD = os.path.join(dataset.location, "test.record")
+LABEL_MAP_PATH = os.path.join(dataset.location, "label_map.pbtxt")
 
-for category in categories:
-    path = os.path.join(dataset_dir, category)
-    label = categories.index(category)
-    print("-----------" + dataset_dir + "-----------" )
-    for img in os.listdir(path):
-        img_path = os.path.join(path, img)
-        path = path.replace("\\","/")
-        print("-----------" + img_path + "-----------" )
-        img = image.load_img(img_path, target_size=(224, 224))
-        img_array = image.img_to_array(img)
-        img_array /= 255.0  # Normalize pixel values
-        data.append(img_array)
-        labels.append(label)
+# 4. Load a pre-trained model (SSD MobileNet v2)
+PRETRAINED_MODEL_URL = 'http://download.tensorflow.org/models/object_detection/ssd_mobilenet_v2_coco_2018_03_29.tar.gz'
+PRETRAINED_MODEL_DIR = 'models/ssd_mobilenet'
+os.makedirs(PRETRAINED_MODEL_DIR, exist_ok=True)
 
-# Convert lists to NumPy arrays
-data = np.array(data)
-labels = np.array(labels)
+!wget -O pretrained_model.tar.gz {PRETRAINED_MODEL_URL}
+!tar -zxvf pretrained_model.tar.gz -C {PRETRAINED_MODEL_DIR}
 
+# 5. Load the trained model for inference
+model = tf.saved_model.load("models/exported_model/saved_model")
 
-from sklearn.model_selection import train_test_split
+# 6. Load the label map for object detection
+def load_label_map(label_map_path):
+    label_map = label_map_util.load_labelmap(label_map_path)
+    categories = label_map_util.convert_label_map_to_categories(label_map, max_num_classes=2, use_display_name=True)
+    return label_map_util.create_category_index(categories)
 
-X_train, X_test, y_train, y_test = train_test_split(data, labels, test_size=0.1, random_state=42)
+category_index = load_label_map(LABEL_MAP_PATH)
 
+# 7. Initialize the video capture (IP Camera URL)
+ip_camera_url = "http://your-ip-camera-url/video"  # Replace with your actual IP camera URL
+cap = cv2.VideoCapture(ip_camera_url)
 
-from tensorflow import keras
-from tensorflow.keras import layers
+# Check if the camera opened successfully
+if not cap.isOpened():
+    print("Error: Couldn't open the IP camera.")
+    exit()
 
-model = keras.Sequential([
-    layers.Conv2D(32, (3, 3), activation='relu', input_shape=(224, 224, 3)),
-    layers.MaxPooling2D((2, 2)),
-    layers.Conv2D(64, (3, 3), activation='relu'),
-    layers.MaxPooling2D((2, 2)),
-    layers.Conv2D(128, (3, 3), activation='relu'),
-    layers.MaxPooling2D((2, 2)),
-    layers.Flatten(),
-    layers.Dense(128, activation='relu'),
-    layers.Dense(len(categories), activation='softmax')
-])
+# Function to run object detection
+def run_inference_for_single_image(model, image_np):
+    image_tensor = model.signatures['serving_default'].inputs[0]
+    output_dict = model(image_tensor)
+    return output_dict
 
-model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
-
-
-model.fit(X_train, y_train, epochs=12, validation_data=(X_test, y_test))
-
-
-model.save('image_classifier_model.h5')
-
-loss, accuracy = model.evaluate(X_test, y_test)
-print(f'Test loss: {loss}')
-print(f'Test accuracy: {accuracy}')
-
-loaded_model = keras.models.load_model('image_classifier_model.h5')
-
-def classify_image(image_path):
-    img = image.load_img(image_path, target_size=(224, 224))
-    img_array = image.img_to_array(img)
-    img_array /= 255.0
-    img_array = np.expand_dims(img_array, axis=0)
-
-    predictions = loaded_model.predict(img_array)[0]
-    print(np.max(predictions))
-    predicted_label = categories[np.argmax(predictions)]
-    if(np.max(predictions)>0.9):
-      return predicted_label
-    else:
-      return "Not Found"
-    return
-
-
-vcap = cv2.VideoCapture('http://192.168.29.190:4747/video')
-#if not vcap.isOpened():
-#    print "File Cannot be Opened"
-img_counter = 0
-while(True):
+# Real-time detection loop
+while True:
     # Capture frame-by-frame
-    ret, frame = vcap.read()
-    #print cap.isOpened(), ret
-    if frame is not None:
-        # Display the resulting frame
-        cv2.imshow('frame',frame)
-        # Press q to close the video windows before it ends if you want
-        k = cv2.waitKey(1)
-        if k%256 == 27:
-            # ESC pressed
-            print("Escape hit, closing...")
-            break
-        elif k%256 == 32:
-            # SPACE pressed
-            img_name = "opencv_frame_{}.png".format(img_counter)
-            cv2.imwrite(img_name, frame)
-            print("{} written!".format(img_name))
-            test_image_path = r'C:\Users\Bagavathi\Downloads\python/'
-            test_image_path = test_image_path.replace("\\","/")
-            test_image_path = test_image_path + img_name
-            prediction = classify_image(test_image_path)
-            print(f'The image is classified as: {prediction}')
-           
-            # img_counter += 1
-    else:
-        print("Frame is None")
+    ret, frame = cap.read()
+    if not ret:
+        print("Failed to grab frame")
+        break
+    
+    # Perform object detection on the frame
+    output_dict = run_inference_for_single_image(model, frame)
+    
+    # Process the output: Visualize the results
+    vis_util.visualize_boxes_and_labels_on_image_array(
+        frame,
+        output_dict['detection_boxes'],
+        output_dict['detection_classes'],
+        output_dict['detection_scores'],
+        category_index,
+        instance_masks=output_dict.get('detection_masks', None),
+        use_normalized_coordinates=True,
+        line_thickness=8)
+
+    # Display the result in the OpenCV window
+    cv2.imshow("Waste Classification", frame)
+    
+    # Check for biodegradable or non-biodegradable class (class IDs can vary depending on your dataset)
+    biodegradable_class_id = 1  # You need to adjust this based on your dataset
+    non_biodegradable_class_id = 2  # Adjust accordingly
+    
+    # Check if the waste is biodegradable or non-biodegradable based on detection
+    if output_dict['detection_classes'][0] == biodegradable_class_id:
+        print("Biodegradable waste detected. Moving left.")
+        ser.write(b'left')  # Send 'left' to Arduino (90 degrees left)
+    elif output_dict['detection_classes'][0] == non_biodegradable_class_id:
+        print("Non-biodegradable waste detected. Moving right.")
+        ser.write(b'right')  # Send 'right' to Arduino (90 degrees right)
+
+    # Exit on pressing 'q'
+    if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-# When everything done, release the capture
-vcap.release()
+# Release the capture and close any OpenCV windows
+cap.release()
 cv2.destroyAllWindows()
-print("Video stop")
+
+# Close serial connection
+ser.close()
