@@ -8,23 +8,21 @@ from roboflow import Roboflow
 from object_detection.utils import label_map_util
 from object_detection.utils import visualization_utils as vis_util
 
-# 1. Initialize Serial Communication with Arduino
-# Make sure to replace 'COM_PORT' with the actual port (e.g., 'COM3' on Windows or '/dev/ttyUSB0' on Linux)
+# Initialize Serial Communication with Arduino
 ser = serial.Serial('COM_PORT', 9600)  # Open serial port at 9600 baud rate
 
-# 2. Download the Dataset from Roboflow
-rf = Roboflow(api_key="aNil8uJXRq")  # Using the provided API key
+# Initialize Roboflow dataset and model
+rf = Roboflow(api_key="aNil8uJXRq")
 project = rf.workspace("sakib-9bfzb").project("waste-detection-2.0-hwohv")
 version = project.version(2)
 dataset = version.download("tfrecord")
 print("Dataset downloaded to:", dataset.location)
 
-# 3. Set up paths for training data
 TRAIN_TFRECORD = os.path.join(dataset.location, "train.record")
 TEST_TFRECORD = os.path.join(dataset.location, "test.record")
 LABEL_MAP_PATH = os.path.join(dataset.location, "label_map.pbtxt")
 
-# 4. Load a pre-trained model (SSD MobileNet v2)
+# Load pre-trained model (SSD MobileNet v2)
 PRETRAINED_MODEL_URL = 'http://download.tensorflow.org/models/object_detection/ssd_mobilenet_v2_coco_2018_03_29.tar.gz'
 PRETRAINED_MODEL_DIR = 'models/ssd_mobilenet'
 os.makedirs(PRETRAINED_MODEL_DIR, exist_ok=True)
@@ -32,10 +30,9 @@ os.makedirs(PRETRAINED_MODEL_DIR, exist_ok=True)
 !wget -O pretrained_model.tar.gz {PRETRAINED_MODEL_URL}
 !tar -zxvf pretrained_model.tar.gz -C {PRETRAINED_MODEL_DIR}
 
-# 5. Load the trained model for inference
 model = tf.saved_model.load("models/exported_model/saved_model")
 
-# 6. Load the label map for object detection
+# Load label map for object detection
 def load_label_map(label_map_path):
     label_map = label_map_util.load_labelmap(label_map_path)
     categories = label_map_util.convert_label_map_to_categories(label_map, max_num_classes=2, use_display_name=True)
@@ -43,7 +40,7 @@ def load_label_map(label_map_path):
 
 category_index = load_label_map(LABEL_MAP_PATH)
 
-# 7. Initialize the video capture (IP Camera URL)
+# Initialize the video capture (IP Camera URL)
 ip_camera_url = "http://your-ip-camera-url/video"  # Replace with your actual IP camera URL
 cap = cv2.VideoCapture(ip_camera_url)
 
@@ -89,11 +86,15 @@ while True:
     
     # Check if the waste is biodegradable or non-biodegradable based on detection
     if output_dict['detection_classes'][0] == biodegradable_class_id:
-        print("Biodegradable waste detected. Moving left.")
-        ser.write(b'left')  # Send 'left' to Arduino (90 degrees left)
+        print("Biodegradable waste detected. Checking sensor...")
+        ser.write(b'check')  # Send 'check' to Arduino to check for ultrasonic/proximity sensor input
+        # Assuming a check for detection is successful, proceed to move servo
+        ser.write(b'left')  # Send 'left' to Arduino (90 degrees left for biodegradable)
     elif output_dict['detection_classes'][0] == non_biodegradable_class_id:
-        print("Non-biodegradable waste detected. Moving right.")
-        ser.write(b'right')  # Send 'right' to Arduino (90 degrees right)
+        print("Non-biodegradable waste detected. Checking sensor...")
+        ser.write(b'check')  # Send 'check' to Arduino to check for ultrasonic/proximity sensor input
+        # Assuming a check for detection is successful, proceed to move servo
+        ser.write(b'right')  # Send 'right' to Arduino (90 degrees right for non-biodegradable)
 
     # Exit on pressing 'q'
     if cv2.waitKey(1) & 0xFF == ord('q'):
